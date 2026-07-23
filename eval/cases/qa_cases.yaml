@@ -1,0 +1,56 @@
+# Grounded question-answering cases.
+#
+# Expectations are expressed as properties of the *evidence* the agent cites and
+# the devices it names, never as expected prose. Asserting on wording would make
+# the suite a style test that breaks on any harmless rephrasing, while leaving
+# the thing that matters — whether the answer is supported — unchecked.
+#
+# `expected_devices` is resolved at runtime from eval/fixtures/ground_truth.py,
+# so these cases stay correct if the dataset is ever regenerated.
+
+- id: acme_low_disk
+  company_id: acme-001
+  question: Which devices at Acme are low on disk space?
+  expect:
+    devices_from: devices_below_disk_free
+    devices_args: {threshold: 15.0}
+    must_name_devices: true
+    must_cite_evidence: true
+    no_refusal: true
+
+- id: high_severity_compliance_none
+  company_id: acme-001
+  question: Show me laptops failing high-severity compliance checks.
+  expect:
+    empty_result: true
+    no_refusal: true
+    # The only high-severity check (disk_encryption) passes everywhere, so the
+    # correct answer is that nothing is failing. A hallucinating agent invents
+    # devices here, which is why this is the single most valuable QA case.
+    must_not_name_any_device: true
+
+- id: macos_older_than_15
+  company_id: acme-001
+  question: How many devices are running an OS older than macOS 15?
+  expect:
+    devices_from: devices_on_platform_older_than
+    devices_args: {platform: darwin, major: 15}
+    must_cite_evidence: true
+    no_refusal: true
+
+- id: globex_low_disk
+  company_id: globex-002
+  question: Which machines are running out of storage?
+  expect:
+    devices_from: devices_below_disk_free
+    devices_args: {threshold: 15.0}
+    must_cite_evidence: true
+    no_refusal: true
+
+- id: initech_screen_lock_failures
+  company_id: initech-003
+  question: Which devices are currently failing the screen lock check?
+  expect:
+    must_cite_evidence: true
+    no_refusal: true
+    must_name_devices: true

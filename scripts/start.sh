@@ -15,19 +15,49 @@ cd "$REPO_ROOT"
 step() { echo; echo "==> $*"; }
 
 # -- Python virtualenv --------------------------------------------------------
+# 3.10 is a hard floor: the code uses PEP 604 unions (`str | None`) that Pydantic
+# evaluates at runtime, so 3.9 fails at import, not just at install. Checked here
+# so an unsupported interpreter gives a clear message, not a pip resolution error.
+py_ok() {
+    command -v "$1" >/dev/null 2>&1 || return 1
+    "$1" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null
+}
+
 if [ -f ".venv/Scripts/python.exe" ]; then
     VENV_PY=".venv/Scripts/python.exe"   # Windows venv layout (Git Bash)
 elif [ -f ".venv/bin/python" ]; then
     VENV_PY=".venv/bin/python"           # POSIX venv layout
 else
-    step "No .venv found - creating one"
-    command -v python3 >/dev/null 2>&1 && PY=python3 || PY=python
+    step "No .venv found - looking for Python 3.10+"
+    PY=""
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
+        if py_ok "$candidate"; then PY="$candidate"; break; fi
+    done
+    if [ -z "$PY" ]; then
+        probe='import sys; v=sys.version_info; print(str(v[0])+"."+str(v[1]))'
+        found=$(python3 -c "$probe" 2>/dev/null || python -c "$probe" 2>/dev/null || echo "not found")
+        echo "" >&2
+        echo "Python 3.10 or newer is required (found: $found)." >&2
+        echo "Install one, then re-run this script:" >&2
+        echo "  macOS:  brew install python@3.12" >&2
+        echo "  Ubuntu: sudo apt install python3.12 python3.12-venv" >&2
+        echo "  or download from https://www.python.org/downloads/" >&2
+        exit 1
+    fi
+    step "Using Python $("$PY" -c 'import sys; v=sys.version_info; print(str(v[0])+"."+str(v[1]))')"
     "$PY" -m venv .venv
     if [ -f ".venv/Scripts/python.exe" ]; then
         VENV_PY=".venv/Scripts/python.exe"
     else
         VENV_PY=".venv/bin/python"
     fi
+fi
+
+# An existing venv built with an unsupported Python is the other way in.
+if ! "$VENV_PY" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null; then
+    echo "The existing .venv uses a Python older than 3.10." >&2
+    echo "Delete it and re-run:  rm -rf .venv" >&2
+    exit 1
 fi
 
 step "Installing Python dependencies (pyproject.toml)"

@@ -18,18 +18,67 @@ function Write-Step($msg) {
 }
 
 # -- Python virtualenv -------------------------------------------------------
+# 3.10 is a hard floor: the code uses PEP 604 unions (`str | None`) that Pydantic
+# evaluates at runtime, so on 3.9 this fails at import, not just at install.
+# Checked here so an unsupported interpreter is a clear message rather than a
+# raw pip resolution error.
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 
-if (-not (Test-Path $VenvPython)) {
-    Write-Step "No .venv found - creating one"
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if (-not $pythonCmd) {
-        Write-Host "python was not found on PATH. Install Python 3.10+ and re-run." -ForegroundColor Red
+# No '%' in the probe: `python` is often a .bat shim (pyenv-win and friends), and
+# cmd.exe would expand %d before Python ever sees the string.
+function Get-PyVersion($exe, $prefix) {
+    try {
+        $out = & $exe @prefix -c "import sys; v=sys.version_info; print(str(v[0])+'.'+str(v[1]))" 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+        return [version]($out | Select-Object -Last 1).Trim()
+    } catch { return $null }
+}
+
+if (Test-Path $VenvPython) {
+    $venvVer = Get-PyVersion $VenvPython @()
+    if ($null -eq $venvVer -or $venvVer -lt [version]"3.10") {
+        Write-Host "The existing .venv uses Python $venvVer, but 3.10+ is required." -ForegroundColor Red
+        Write-Host "Delete it and re-run:  Remove-Item -Recurse -Force .venv" -ForegroundColor Yellow
         exit 1
     }
-    python -m venv "$RepoRoot\.venv"
+    Write-Step ".venv already exists (Python $venvVer) - reusing it"
 } else {
-    Write-Step ".venv already exists - reusing it"
+    Write-Step "No .venv found - looking for Python 3.10+"
+    # The py launcher is the usual way a newer Python is reachable on Windows
+    # even when `python` on PATH is old.
+    $candidates = @(
+        @{ Exe = "python";  Prefix = @() },
+        @{ Exe = "py";      Prefix = @("-3.13") },
+        @{ Exe = "py";      Prefix = @("-3.12") },
+        @{ Exe = "py";      Prefix = @("-3.11") },
+        @{ Exe = "py";      Prefix = @("-3.10") },
+        @{ Exe = "python3"; Prefix = @() }
+    )
+    $chosen = $null
+    foreach ($c in $candidates) {
+        if (-not (Get-Command $c.Exe -ErrorAction SilentlyContinue)) { continue }
+        $v = Get-PyVersion $c.Exe $c.Prefix
+        if ($null -ne $v -and $v -ge [version]"3.10") {
+            $chosen = $c
+            Write-Step "Using Python $v ($($c.Exe) $($c.Prefix -join ' '))"
+            break
+        }
+    }
+    if ($null -eq $chosen) {
+        $found = Get-PyVersion "python" @()
+        Write-Host ""
+        Write-Host "Python 3.10 or newer is required$(if ($found) { ", but the Python on PATH is $found" })." -ForegroundColor Red
+        Write-Host "Install a newer Python, then re-run this script:" -ForegroundColor Yellow
+        Write-Host "  winget install Python.Python.3.12" -ForegroundColor Yellow
+        Write-Host "  (or download from https://www.python.org/downloads/)" -ForegroundColor Yellow
+        Write-Host "Already have one? Make sure it is on PATH, or that 'py -3.12' works." -ForegroundColor Yellow
+        exit 1
+    }
+    & $chosen.Exe @($chosen.Prefix) -m venv "$RepoRoot\.venv"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Could not create the virtualenv - see output above." -ForegroundColor Red
+        exit 1
+    }
 }
 
 Write-Step "Installing Python dependencies (pyproject.toml)"
